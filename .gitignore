@@ -1,0 +1,53 @@
+# Secrets — never commit
+.env
+*.env
+*.env.local
+
+# Runtime state files (contain spend history, telemetry)
+gemini_credits.json
+gemini_credits.json.lock
+gemini_telemetry.json
+
+# Runtime output directories
+Chat_Logs/
+Generated_Images/
+Code_Results/
+Council_Logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# OS
+Thumbs.db

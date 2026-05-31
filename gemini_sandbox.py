@@ -1953,9 +1953,7 @@ def main():
     show_thinking    = False
     search_grounding = True
     custom_base      = None
-    current_system   = build_system_prompt(selected_model)
-    console.print(f"[dim yellow]DEBUG date injection: {datetime.now().astimezone().strftime('%A, %B %#d, %Y' if os.name == 'nt' else '%A, %B %-d, %Y')} ({datetime.now().astimezone().strftime('%Z')})[/dim yellow]")
-    
+    current_system   = build_system_prompt(selected_model)    
 
     chat_config = build_chat_config(current_system, selected_model,
                                     thinking_on, show_thinking, search_grounding)

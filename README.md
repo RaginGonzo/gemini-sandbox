@@ -131,6 +131,8 @@ All of these are listed in `.gitignore` so secrets and runtime state don't get c
 - YouTube transcript fetching depends on `youtube-transcript-api`; not every video has transcripts available, and weaker models may struggle with long transcripts.
 
 ## The Council In Action
+<img width="1197" height="762" alt="Screenshot 2026-05-30 214907" src="https://github.com/user-attachments/assets/a5982900-74c1-4d89-82ef-29be9bb7d2ca" />
+<img width="1196" height="763" alt="Screenshot 2026-05-30 214953" src="https://github.com/user-attachments/assets/2179f77f-d66e-422a-b26a-69c0cde251b7" />
 
 
 ## License

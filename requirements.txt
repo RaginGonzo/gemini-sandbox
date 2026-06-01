@@ -1,6 +1,7 @@
-google-genai>=1.0
-google-api-python-client>=2.0
-youtube-transcript-api>=1.0
-rich>=13.0
-filelock>=3.0
-python-dotenv>=1.0
+google-genai
+google-api-python-client
+youtube-transcript-api
+python-dotenv
+rich
+filelock
+pillow

@@ -157,8 +157,10 @@ GROUNDING_COST = {"2.5": 0.035, "3": 0.014}
 GROUNDING_FREE_RPD_25 = 1500  # 2.x family: shared free per day (Flash + Flash-Lite)
 GROUNDING_FREE_RPM_3  = 5000   # 3.x family: shared free per month (all 3.x)
 
-MAX_OUTPUT_TOKENS   = 65536        # max model output ceiling (billed only if generated)
-MODEL_CONTEXT_LIMIT = 1_048_576    # 1M-token context window (all current chat models)
+MAX_OUTPUT_TOKENS     = 65536      # max model output ceiling (billed only if generated)
+TOKEN_PRUNE_THRESHOLD = 200_000    # prune trigger: prune once context exceeds this (cost guardrail)
+TOKEN_PRUNE_TARGET    = 100_000    # prune down to this — headroom so it won't re-prune every turn
+MIN_KEEP_ENTRIES      = 20         # never prune below this many most-recent history entries
 
 # Flip True to debug chat-history transport issues
 DEBUG_CHAT_HISTORY = False
@@ -839,25 +841,46 @@ def stream_with_explicit_content(content_obj, chat, model_name, chat_config, sho
     return full_response, thinking_text, in_tok, out_tok, grounding_queries, chat
 
 
-def prune_history_if_needed(chat, model_name, chat_config):
+def prune_history_if_needed(chat, model_name, chat_config, context_tok):
     history = [h for h in chat.get_history() if h.role in ('user', 'model')]
-    if len(history) <= MAX_HISTORY_TURNS:
+    over_turns  = len(history) > MAX_HISTORY_TURNS
+    over_tokens = context_tok > TOKEN_PRUNE_THRESHOLD
+    if not over_turns and not over_tokens:
         return chat
 
-    trimmed = history[-MAX_HISTORY_TURNS:]
+    trimmed = history
+    if len(trimmed) > MAX_HISTORY_TURNS:
+        trimmed = trimmed[-MAX_HISTORY_TURNS:]
+
+    if over_tokens:
+        # Trigger at the threshold but prune down to the lower target for headroom.
+        # count_tokens is free, so we verify the exact size each step and never drop
+        # below MIN_KEEP_ENTRIES most-recent entries.
+        while len(trimmed) - 2 >= MIN_KEEP_ENTRIES:
+            try:
+                tok = client.models.count_tokens(model=model_name, contents=trimmed)
+                total = getattr(tok, "total_tokens", 0)
+            except Exception:
+                break
+            if total <= TOKEN_PRUNE_TARGET:
+                break
+            trimmed = trimmed[2:]
+
+    if len(trimmed) >= len(history):
+        return chat
+
     try:
         new_chat = client.chats.create(
             model=model_name, config=chat_config, history=trimmed
         )
         console.print(
-            f"[dim yellow]Context pruned: kept last {MAX_HISTORY_TURNS} turns "
+            f"[dim yellow]Context pruned: kept last {len(trimmed)} entries "
             f"(was {len(history)}). Use /history to verify.[/dim yellow]"
         )
         return new_chat
     except Exception as e:
         console.print(f"[dim red]Context prune failed: {e} — continuing with full history.[/dim red]")
         return chat
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # COMMAND: /balance
@@ -2017,7 +2040,7 @@ def main():
     session_next_warn = SESSION_WARN_THRESHOLD
     session_msgs = 0
     active_uploads = []
-    last_in_tok = 0
+    context_tok = 0
 
     log_interaction("SYSTEM", f"Session started — model: {selected_model}")
     write_session_header(get_model_info(selected_model)['display'])
@@ -2333,12 +2356,20 @@ def main():
             elif cmd == '/history':
                 history = chat.get_history()
                 turn_count = len(history)
-                if last_in_tok > 0:
-                    ctx_line = f"[bold]Context tokens (actual):[/bold] {last_in_tok:,} / {MODEL_CONTEXT_LIMIT:,}"
-                    ctx_note = "[dim]Actual count from the most recent model response.[/dim]"
+                if context_tok > 0:
+                    ctx_disp = round(context_tok / TOKEN_PRUNE_THRESHOLD * 100)
+                    if ctx_disp >= 85:
+                        ctx_style = "bold red"
+                    elif ctx_disp >= 70:
+                        ctx_style = "yellow"
+                    else:
+                        ctx_style = "dim"
+                    ctx_line = (f"[bold]Context tokens:[/bold] "
+                                f"[{ctx_style}]{context_tok:,} / {TOKEN_PRUNE_THRESHOLD:,} ({ctx_disp}%)[/{ctx_style}]")
+                    ctx_note = "[dim]Live count from the most recent turn; prunes at 100%, down to 50%.[/dim]"
                 else:
-                    ctx_line = "[bold]Context tokens (actual):[/bold] 0 (no calls yet this session)"
-                    ctx_note = "[dim]Send a message to populate the actual token count.[/dim]"
+                    ctx_line = f"[bold]Context tokens:[/bold] 0 / {TOKEN_PRUNE_THRESHOLD:,} (0%)"
+                    ctx_note = "[dim]Send a message to populate the live token count.[/dim]"
                 console.print(Panel(
                     f"[bold]Chat turns in context:[/bold] {turn_count}\n"
                     f"{ctx_line}\n"
@@ -2585,7 +2616,7 @@ def main():
             console.print(
                 f"\n[bold white]{get_model_info(selected_model)['display']}:[/bold white]"
             )
-            chat = prune_history_if_needed(chat, selected_model, chat_config)
+            chat = prune_history_if_needed(chat, selected_model, chat_config, context_tok)
 
             if DEBUG_CHAT_HISTORY:
                 print("\n[DEBUG] chat history at send time:")
@@ -2606,7 +2637,7 @@ def main():
                 )
 
             cost = calc_cost(selected_model, in_tok, out_tok)
-            last_in_tok = in_tok
+            context_tok = in_tok + out_tok
             if grounding_queries:
                 gen = get_model_gen(selected_model)
                 if gen == "3":
@@ -2647,6 +2678,18 @@ def main():
                 f"[{color}][dim]Balance:[/dim] ${new_bal:.4f}[/{color}]",
                 title="TELEMETRY", border_style="dim white", expand=False
             ))
+
+            ctx_pct = context_tok / TOKEN_PRUNE_THRESHOLD * 100
+            ctx_disp = round(ctx_pct)
+            if ctx_disp >= 85:
+                ctx_style = "bold red"
+            elif ctx_disp >= 70:
+                ctx_style = "yellow"
+            else:
+                ctx_style = "dim"
+            console.print(
+                f"[{ctx_style}]ctx: {context_tok:,} / {TOKEN_PRUNE_THRESHOLD:,} ({ctx_disp}%)[/{ctx_style}]"
+            )
 
             if WARN_RED < new_bal <= WARN_YELLOW:
                 console.print(

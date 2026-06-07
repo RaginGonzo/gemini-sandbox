@@ -297,11 +297,14 @@ def clear_terminal():
     os.system('cls' if os.name == 'nt' else 'clear')
 
 
-def log_interaction(speaker, text, cost=None):
+def log_interaction(speaker, text, cost=None, ctx=None):
     with open(session_log_file, "a", encoding="utf-8") as f:
         f.write(f"**{speaker}**: {text}\n")
         if cost is not None:
             f.write(f"*Cost: ${cost:.6f}*\n")
+        if ctx is not None:
+            pct = round(ctx / TOKEN_PRUNE_THRESHOLD * 100)
+            f.write(f"*Context: {ctx:,} / {TOKEN_PRUNE_THRESHOLD:,} ({pct}%)*\n")
         f.write("\n---\n\n")
 
 
@@ -913,6 +916,53 @@ def cmd_balance():
                 console.print("[red]Invalid amount.[/red]")
         else:
             console.print("[red]Type 'a' to add or 'c' to continue.[/red]")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMMAND: /help
+# ═══════════════════════════════════════════════════════════════════════════════
+def cmd_help():
+    table = Table(title="COMMANDS", expand=False, show_lines=False,
+                  title_style="bold", border_style="dim")
+    table.add_column("Command", style="cyan", no_wrap=True, min_width=24)
+    table.add_column("Description", style="white")
+
+    table.add_row("[bold dim]Session[/bold dim]", "")
+    table.add_row("  /quit", "Save logs and exit")
+    table.add_row("  /clear", "Clear terminal")
+    table.add_row("  /reset [hard]", "Restore default prompt (hard clears history)")
+    table.add_row("  /sync", "Manual telemetry sync from dashboard")
+    table.add_row("  /history", "Context size, cost, and turn count")
+    table.add_row("  /balance", "View balance or add funds")
+    table.add_row("  /add [amount]", "Quick credit top-up")
+    table.add_section()
+
+    table.add_row("[bold dim]Model & Thinking[/bold dim]", "")
+    table.add_row("  /model", "Switch model (preserves history)")
+    table.add_row("  /system [text]", "Override system prompt")
+    table.add_row("  /think [level]", "on | off | low | medium | high | max")
+    table.add_row("  /thinkon /thinkoff", "Enable or disable thinking")
+    table.add_row("  /showthink /hidethink", "Show or hide reasoning stream")
+    table.add_section()
+
+    table.add_row("[bold dim]Tools[/bold dim]", "")
+    table.add_row("  /upload [file]", "Inject file into chat context")
+    table.add_row("  /upload run [.py]", "Execute Python file in sandbox")
+    table.add_row("  /url [url]", "Fetch URL into context")
+    table.add_row("  /execute [prompt]", "Sandboxed code execution")
+    table.add_row("  /imagine [pro] prompt", "Generate image (pro for Pro model)")
+    table.add_row("  /embed [text]", "Embedding + cosine similarity")
+    table.add_section()
+
+    table.add_row("[bold dim]YouTube[/bold dim]", "")
+    table.add_row("  /yt_search [term]", "Search YouTube videos")
+    table.add_row("  /yt_analyze [id]", "Fetch and analyze transcript")
+    table.add_section()
+
+    table.add_row("[bold dim]Other[/bold dim]", "")
+    table.add_row("  /council", "Multi-agent deliberation engine")
+
+    console.print(table)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2041,6 +2091,7 @@ def main():
     session_msgs = 0
     active_uploads = []
     context_tok = 0
+    low_balance_ack = False
 
     log_interaction("SYSTEM", f"Session started — model: {selected_model}")
     write_session_header(get_model_info(selected_model)['display'])
@@ -2052,9 +2103,9 @@ def main():
         footer = Text("\n[ ", style="dim")
         footer.append("Commands: ", style="bold")
         footer.append(
-            "/quit /clear /reset /sync /model /system /upload /upload run "
+            "/quit /clear /reset /model /system /think /upload /upload run "
             "/imagine /url /execute /embed /history /balance /add "
-            "/thinkon /thinkoff /showthink /hidethink /yt_search /yt_analyze /council\n",
+            "/yt_search /yt_analyze /council /help\n",
             style="cyan"
         )
         footer.append(f"  Session: ${session_cost:.4f}  |  ", style="dim")
@@ -2069,14 +2120,16 @@ def main():
         )
         console.print(footer)
 
-        if bal <= WARN_RED:
+        if bal <= WARN_RED and not low_balance_ack:
             console.print(Panel(
                 f"[red]CRITICAL: Balance at ${bal:.4f} "
                 f"(red threshold ${WARN_RED:.2f})[/red]\n"
                 "Use [bold]/balance → /add[/bold] to top up.",
                 title="HARD PAUSE", border_style="red"
             ))
-            if not Confirm.ask("Continue with current balance?", default=False):
+            proceed = Confirm.ask("Continue with current balance?", default=False)
+            low_balance_ack = True
+            if not proceed:
                 console.print("[dim]Use /balance to top up or /quit to exit.[/dim]")
                 continue
 
@@ -2580,6 +2633,10 @@ def main():
                 else:
                     continue
 
+            elif cmd == '/help':
+                cmd_help()
+                continue
+
             elif cmd == '/council':
                 topic = input("\nSeed topic for the Council: ").strip()
                 if not topic:
@@ -2667,7 +2724,7 @@ def main():
             tps = out_tok / elapsed if elapsed > 0 else 0
 
             log_interaction(get_model_info(selected_model)['display'],
-                            full_response, cost=cost)
+                            full_response, cost=cost, ctx=context_tok)
 
             color = balance_color(new_bal)
             console.print(Panel(
